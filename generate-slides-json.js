@@ -6,7 +6,10 @@ const outputFile = path.join(__dirname, 'slides.json');
 
 try {
     const files = fs.readdirSync(slidesDir)
-        .filter(file => file.endsWith('.webp'))
+        .filter(file => {
+            const ext = path.extname(file).toLowerCase();
+            return ['.webp', '.avif', '.jpg', '.jpeg', '.png'].includes(ext);
+        })
         .map(file => `slides/${file}`);
 
     fs.writeFileSync(outputFile, JSON.stringify(files, null, 2));
