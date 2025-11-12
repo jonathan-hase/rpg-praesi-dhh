@@ -1,21 +1,20 @@
-// Card Study Application with WebGPU
-class CardStudyApp {
+// Slide Presentation Application with WebGPU
+class SlidePresentation {
     constructor() {
-        this.canvas = document.getElementById('cardCanvas');
+        this.canvas = document.getElementById('slideCanvas');
         this.loadingEl = document.getElementById('loading');
         this.errorEl = document.getElementById('error');
 
-        this.cards = [];
-        this.currentCardIndex = 0;
-        this.shuffledIndices = [];
+        this.slides = [];
+        this.currentSlideIndex = 0;
         this.isAnimating = false;
         this.animationProgress = 0;
         this.throwDirection = { x: 0, y: 0 };
         this.throwRotation = 0;
 
-        // Card dimensions in mm
-        this.cardWidthMM = 63;
-        this.cardHeightMM = 88;
+        // Slide dimensions will be determined from loaded images
+        this.slideWidth = 0;
+        this.slideHeight = 0;
 
         // WebGPU resources
         this.device = null;
@@ -31,11 +30,11 @@ class CardStudyApp {
     async init() {
         try {
             await this.checkWebGPU();
-            await this.loadCardList();
+            await this.loadSlideList();
             await this.initWebGPU();
+            this.loadProgress();
+            await this.loadCurrentSlides();
             await this.setupCanvas();
-            this.loadShuffleState();
-            await this.loadCurrentCards();
             this.setupEventListeners();
             this.loadingEl.style.display = 'none';
             this.render();
@@ -50,16 +49,16 @@ class CardStudyApp {
         }
     }
 
-    async loadCardList() {
-        // Load the list of all card files
-        const response = await fetch('cards.json');
+    async loadSlideList() {
+        // Load the list of all slide files
+        const response = await fetch('slides.json');
         if (!response.ok) {
-            throw new Error('Failed to load card list. Please ensure cards.json exists.');
+            throw new Error('Failed to load slide list. Please ensure slides.json exists.');
         }
-        this.cards = await response.json();
+        this.slides = await response.json();
 
-        if (this.cards.length === 0) {
-            throw new Error('No cards found in the card list.');
+        if (this.slides.length === 0) {
+            throw new Error('No slides found in the slide list.');
         }
     }
 
@@ -170,22 +169,29 @@ class CardStudyApp {
         const updateSize = () => {
             const dpi = window.devicePixelRatio || 1;
 
-            // Calculate card size in pixels (96 DPI = 1 inch = 25.4mm)
-            const mmToPixel = (96 / 25.4) * dpi;
-            const cardWidthPx = this.cardWidthMM * mmToPixel;
-            const cardHeightPx = this.cardHeightMM * mmToPixel;
+            // Use the aspect ratio from the loaded slide
+            // If slideWidth/slideHeight are not set yet, they will be set after loading first slide
+            if (this.slideWidth > 0 && this.slideHeight > 0) {
+                const slideAspect = this.slideWidth / this.slideHeight;
 
-            // Ensure the card fits on screen with some margin
-            const maxWidth = window.innerWidth * 0.9;
-            const maxHeight = window.innerHeight * 0.9;
+                // Ensure the slide fits on screen with some margin
+                const maxWidth = window.innerWidth * 0.9;
+                const maxHeight = window.innerHeight * 0.9;
 
-            let scale = 1;
-            if (cardWidthPx > maxWidth || cardHeightPx > maxHeight) {
-                scale = Math.min(maxWidth / cardWidthPx, maxHeight / cardHeightPx);
+                let displayWidth, displayHeight;
+                if (maxWidth / maxHeight > slideAspect) {
+                    // Height-constrained
+                    displayHeight = maxHeight;
+                    displayWidth = displayHeight * slideAspect;
+                } else {
+                    // Width-constrained
+                    displayWidth = maxWidth;
+                    displayHeight = displayWidth / slideAspect;
+                }
+
+                this.slideWidth = displayWidth;
+                this.slideHeight = displayHeight;
             }
-
-            this.cardWidth = cardWidthPx * scale;
-            this.cardHeight = cardHeightPx * scale;
 
             this.canvas.width = window.innerWidth * dpi;
             this.canvas.height = window.innerHeight * dpi;
@@ -197,64 +203,54 @@ class CardStudyApp {
         window.addEventListener('resize', updateSize);
     }
 
-    loadShuffleState() {
-        const saved = this.getCookie('cardStudyProgress');
+    loadProgress() {
+        const saved = this.getCookie('slideProgress');
         if (saved) {
             try {
                 const state = JSON.parse(saved);
-                this.shuffledIndices = state.indices;
-                this.currentCardIndex = state.current;
+                this.currentSlideIndex = state.current;
 
                 // Validate the saved state
-                if (this.shuffledIndices.length !== this.cards.length) {
-                    throw new Error('Invalid saved state');
+                if (this.currentSlideIndex >= this.slides.length) {
+                    this.currentSlideIndex = 0;
                 }
             } catch (e) {
-                this.resetShuffle();
+                this.currentSlideIndex = 0;
             }
         } else {
-            this.resetShuffle();
+            this.currentSlideIndex = 0;
         }
     }
 
-    saveShuffleState() {
+    saveProgress() {
         const state = {
-            indices: this.shuffledIndices,
-            current: this.currentCardIndex
+            current: this.currentSlideIndex
         };
-        this.setCookie('cardStudyProgress', JSON.stringify(state), 365);
+        this.setCookie('slideProgress', JSON.stringify(state), 365);
     }
 
-    resetShuffle() {
-        // Create array of indices and shuffle
-        this.shuffledIndices = Array.from({ length: this.cards.length }, (_, i) => i);
-        this.fisherYatesShuffle(this.shuffledIndices);
-        this.currentCardIndex = 0;
-        this.saveShuffleState();
-    }
+    async loadCurrentSlides() {
+        // Load current slide
+        const currentSlidePath = this.slides[this.currentSlideIndex];
+        const textureData = await this.loadTexture(currentSlidePath);
+        this.currentTexture = textureData.texture;
 
-    fisherYatesShuffle(array) {
-        for (let i = array.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [array[i], array[j]] = [array[j], array[i]];
+        // Set slide dimensions from first loaded image
+        if (this.slideWidth === 0 || this.slideHeight === 0) {
+            this.slideWidth = textureData.width;
+            this.slideHeight = textureData.height;
         }
-    }
 
-    async loadCurrentCards() {
-        // Load current card
-        const currentCardPath = this.cards[this.shuffledIndices[this.currentCardIndex]];
-        this.currentTexture = await this.loadTexture(currentCardPath);
-
-        // Load next few cards for the stack effect
+        // Load next few slides for the stack effect
         this.nextTextures = [];
-        const cardsToPreload = Math.min(5, this.getRemainingCards());
+        const slidesToPreload = Math.min(5, this.getRemainingSlides());
 
-        for (let i = 1; i <= cardsToPreload; i++) {
-            const idx = this.currentCardIndex + i;
-            if (idx < this.shuffledIndices.length) {
-                const cardPath = this.cards[this.shuffledIndices[idx]];
-                const texture = await this.loadTexture(cardPath);
-                this.nextTextures.push(texture);
+        for (let i = 1; i <= slidesToPreload; i++) {
+            const idx = this.currentSlideIndex + i;
+            if (idx < this.slides.length) {
+                const slidePath = this.slides[idx];
+                const textureData = await this.loadTexture(slidePath);
+                this.nextTextures.push(textureData.texture);
             }
         }
     }
@@ -280,19 +276,25 @@ class CardStudyApp {
             [imageBitmap.width, imageBitmap.height]
         );
 
-        this.textureCache.set(path, texture);
-        return texture;
+        const textureData = {
+            texture: texture,
+            width: imageBitmap.width,
+            height: imageBitmap.height
+        };
+
+        this.textureCache.set(path, textureData);
+        return textureData;
     }
 
-    getRemainingCards() {
-        return this.shuffledIndices.length - this.currentCardIndex;
+    getRemainingSlides() {
+        return this.slides.length - this.currentSlideIndex;
     }
 
     setupEventListeners() {
         const handleInteraction = (e) => {
             e.preventDefault();
             if (!this.isAnimating) {
-                this.throwCard();
+                this.throwSlide();
             }
         };
 
@@ -300,7 +302,7 @@ class CardStudyApp {
         this.canvas.addEventListener('touchstart', handleInteraction, { passive: false });
     }
 
-    throwCard() {
+    throwSlide() {
         this.isAnimating = true;
         this.animationProgress = 0;
 
@@ -334,25 +336,24 @@ class CardStudyApp {
             if (this.animationProgress < 1) {
                 requestAnimationFrame(animate);
             } else {
-                this.onCardThrowComplete();
+                this.onSlideThrowComplete();
             }
         };
 
         requestAnimationFrame(animate);
     }
 
-    async onCardThrowComplete() {
+    async onSlideThrowComplete() {
         this.isAnimating = false;
-        this.currentCardIndex++;
+        this.currentSlideIndex++;
 
-        if (this.currentCardIndex >= this.shuffledIndices.length) {
-            // Reshuffle
-            this.resetShuffle();
-        } else {
-            this.saveShuffleState();
+        if (this.currentSlideIndex >= this.slides.length) {
+            // Loop back to start
+            this.currentSlideIndex = 0;
         }
 
-        await this.loadCurrentCards();
+        this.saveProgress();
+        await this.loadCurrentSlides();
         this.render();
     }
 
@@ -363,10 +364,10 @@ class CardStudyApp {
 
         // Create transformation matrix
         const aspectRatio = this.canvas.width / this.canvas.height;
-        const cardAspect = this.cardWidth / this.cardHeight;
+        const slideAspect = this.slideWidth / this.slideHeight;
 
-        const scaleX = (this.cardWidth / this.canvas.width) * 2 * scale;
-        const scaleY = (this.cardHeight / this.canvas.height) * 2 * scale;
+        const scaleX = (this.slideWidth / this.canvas.width) * 2 * scale;
+        const scaleY = (this.slideHeight / this.canvas.height) * 2 * scale;
 
         return new Float32Array([
             cos * scaleX, sin * scaleX, 0, 0,
@@ -392,8 +393,8 @@ class CardStudyApp {
         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
         passEncoder.setPipeline(this.pipeline);
 
-        // Render stack of next cards (from back to front)
-        const remaining = this.getRemainingCards();
+        // Render stack of next slides (from back to front)
+        const remaining = this.getRemainingSlides();
         const maxStack = 5;
         const stackSize = Math.min(maxStack, remaining - 1);
 
@@ -403,16 +404,16 @@ class CardStudyApp {
                 const offset = (stackSize - i) * 3;
                 const scale = 0.95 + (i * 0.01);
 
-                // Calculate visibility: fully visible until last few cards
+                // Calculate visibility: fully visible until last few slides
                 let opacity = 1.0;
                 if (remaining <= maxStack) {
-                    const cardPosition = stackSize - i;
-                    if (cardPosition >= remaining - 1) {
+                    const slidePosition = stackSize - i;
+                    if (slidePosition >= remaining - 1) {
                         opacity = 0.0;
                     }
                 }
 
-                this.renderCard(
+                this.renderSlide(
                     this.nextTextures[i],
                     offset,
                     -offset,
@@ -425,7 +426,7 @@ class CardStudyApp {
             }
         }
 
-        // Render current card (with throw animation if active)
+        // Render current slide (with throw animation if active)
         if (this.currentTexture) {
             let offsetX = 0;
             let offsetY = 0;
@@ -440,7 +441,7 @@ class CardStudyApp {
                 opacity = 1.0 - this.animationProgress;
             }
 
-            this.renderCard(
+            this.renderSlide(
                 this.currentTexture,
                 offsetX,
                 offsetY,
@@ -456,7 +457,7 @@ class CardStudyApp {
         this.device.queue.submit([commandEncoder.finish()]);
     }
 
-    renderCard(texture, offsetX, offsetY, scale, rotation, depth, opacity, passEncoder) {
+    renderSlide(texture, offsetX, offsetY, scale, rotation, depth, opacity, passEncoder) {
         const sampler = this.device.createSampler({
             magFilter: 'linear',
             minFilter: 'linear',
@@ -517,7 +518,7 @@ class CardStudyApp {
 
 // Initialize the app when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => new CardStudyApp());
+    document.addEventListener('DOMContentLoaded', () => new SlidePresentation());
 } else {
-    new CardStudyApp();
+    new SlidePresentation();
 }
