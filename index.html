@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTGA Card Study</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            touch-action: none;
+            user-select: none;
+        }
+
+        canvas {
+            display: block;
+            cursor: pointer;
+        }
+
+        #loading {
+            position: absolute;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            text-align: center;
+        }
+
+        #error {
+            position: absolute;
+            color: #ff6b6b;
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+            text-align: center;
+            padding: 20px;
+            max-width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading cards...</div>
+    <div id="error" style="display: none;"></div>
+    <canvas id="cardCanvas"></canvas>
+    <script src="app.js"></script>
+</body>
+</html>
