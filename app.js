@@ -254,7 +254,6 @@ class SlidePresentation {
             this.canvas.style.height = `${window.innerHeight}px`;
         };
 
-        this.updateCanvasSize();
         window.addEventListener('resize', () => {
             this.updateCanvasSize();
             if (this.currentTexture) {
