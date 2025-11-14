@@ -1,30 +1,78 @@
-// Slide Presentation Application with WebGPU
+// ============================================================================
+// SLIDE PRESENTATION APPLICATION WITH WEBGPU
+// ============================================================================
+
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+const CONFIG = {
+    // Display & Layout
+    WINDOW_GAP: 100, // Gap from window edges in pixels
+
+    // Animation Timing
+    THROW_DURATION: 500, // Duration of throw animation in ms
+    SLIDE_IN_DURATION: 300, // Duration of slide-in animation in ms
+
+    // Throw Animation
+    THROW_DISTANCE_MIN: 2.5, // Minimum throw distance
+    THROW_DISTANCE_RANGE: 0.5, // Additional random distance range
+    THROW_ROTATION_RANGE: 720, // Rotation range (-360 to +360 degrees)
+
+    // Next Slide Positioning
+    NEXT_SLIDE_ROTATION_RANGE: 10, // Random rotation range (-15 to +15 degrees)
+    NEXT_SLIDE_OFFSET_RANGE: 0.4, // Random offset range (-0.2 to +0.2)
+    NEXT_SLIDE_BRIGHTNESS: 0.6, // Brightness for next slide (0.6 = 40% darkened)
+
+    // Stack Effect
+    MAX_STACK_SIZE: 5, // Maximum number of slides in stack
+    STACK_DEPTH_OFFSET: 0.05, // Depth offset per slide in stack
+    STACK_SCALE_INCREMENT: 0.01, // Scale increment per slide in stack
+    STACK_BASE_SCALE: 0.95, // Base scale for stacked slides
+    STACK_POSITION_OFFSET: 3, // Position offset multiplier for stack
+
+    // Performance
+    SLIDES_TO_PRELOAD: 5, // Number of slides to preload ahead
+
+    // Storage
+    COOKIE_EXPIRY_DAYS: 365, // Days until progress cookie expires
+    PROGRESS_COOKIE_NAME: 'slideProgress',
+
+    // Data Source
+    SLIDES_JSON_PATH: 'slides.json',
+};
+
+// ============================================================================
+// MAIN APPLICATION CLASS
+// ============================================================================
 class SlidePresentation {
     constructor() {
+        // DOM Elements
         this.canvas = document.getElementById('slideCanvas');
         this.loadingEl = document.getElementById('loading');
         this.errorEl = document.getElementById('error');
 
+        // Slide Data
         this.slides = [];
         this.currentSlideIndex = 0;
+
+        // Animation State
         this.isAnimating = false;
         this.animationProgress = 0;
         this.throwDirection = { x: 0, y: 0 };
         this.throwRotation = 0;
 
-        // Original slide dimensions from loaded images (never changes)
-        this.originalSlideWidth = 0;
+        // Slide Dimensions
+        this.originalSlideWidth = 0;  // Original image dimensions (never changes)
         this.originalSlideHeight = 0;
-        // Display dimensions (recalculated on resize)
-        this.displayWidth = 0;
+        this.displayWidth = 0;         // Display dimensions (recalculated on resize)
         this.displayHeight = 0;
 
-        // Next slide random positioning
+        // Next Slide Positioning
         this.nextSlideRotation = 0;
         this.nextSlideOffsetX = 0;
         this.nextSlideOffsetY = 0;
 
-        // WebGPU resources
+        // WebGPU Resources
         this.device = null;
         this.context = null;
         this.pipeline = null;
@@ -35,6 +83,10 @@ class SlidePresentation {
         this.init();
     }
 
+    // ========================================================================
+    // INITIALIZATION
+    // ========================================================================
+
     async init() {
         try {
             await this.checkWebGPU();
@@ -43,9 +95,7 @@ class SlidePresentation {
             this.loadProgress();
             this.setupCanvas();
             await this.loadCurrentSlides();
-            // Generate initial random position for next slide
             this.generateNextSlidePosition();
-            // Update canvas size now that we have slide dimensions
             this.updateCanvasSize();
             this.setupEventListeners();
             this.loadingEl.style.display = 'none';
@@ -62,10 +112,9 @@ class SlidePresentation {
     }
 
     async loadSlideList() {
-        // Load the list of all slide files
-        const response = await fetch('slides.json');
+        const response = await fetch(CONFIG.SLIDES_JSON_PATH);
         if (!response.ok) {
-            throw new Error('Failed to load slide list. Please ensure slides.json exists.');
+            throw new Error(`Failed to load slide list. Please ensure ${CONFIG.SLIDES_JSON_PATH} exists.`);
         }
         this.slides = await response.json();
 
@@ -181,14 +230,12 @@ class SlidePresentation {
         this.updateCanvasSize = () => {
             const dpi = window.devicePixelRatio || 1;
 
-            // Use the aspect ratio from the original loaded slide
+            // Calculate display dimensions based on original slide aspect ratio
             if (this.originalSlideWidth > 0 && this.originalSlideHeight > 0) {
                 const slideAspect = this.originalSlideWidth / this.originalSlideHeight;
 
-                // 10px gap on all sides
-                const gap = 10;
-                const maxWidth = window.innerWidth - (gap * 2);
-                const maxHeight = window.innerHeight - (gap * 2);
+                const maxWidth = window.innerWidth - (CONFIG.WINDOW_GAP * 2);
+                const maxHeight = window.innerHeight - (CONFIG.WINDOW_GAP * 2);
 
                 if (maxWidth / maxHeight > slideAspect) {
                     // Height-constrained
@@ -216,47 +263,37 @@ class SlidePresentation {
         });
     }
 
-    loadProgress() {
-        const saved = this.getCookie('slideProgress');
-        if (saved) {
-            try {
-                const state = JSON.parse(saved);
-                this.currentSlideIndex = state.current;
-
-                // Validate the saved state
-                if (this.currentSlideIndex >= this.slides.length) {
-                    this.currentSlideIndex = 0;
-                }
-            } catch (e) {
-                this.currentSlideIndex = 0;
+    setupEventListeners() {
+        const handleInteraction = (e) => {
+            e.preventDefault();
+            if (!this.isAnimating) {
+                this.throwSlide();
             }
-        } else {
-            this.currentSlideIndex = 0;
-        }
+        };
+
+        this.canvas.addEventListener('click', handleInteraction);
+        this.canvas.addEventListener('touchstart', handleInteraction, { passive: false });
     }
 
-    saveProgress() {
-        const state = {
-            current: this.currentSlideIndex
-        };
-        this.setCookie('slideProgress', JSON.stringify(state), 365);
-    }
+    // ========================================================================
+    // SLIDE MANAGEMENT
+    // ========================================================================
 
     async loadCurrentSlides() {
-        // Load current slide
+        // Load current slide texture
         const currentSlidePath = this.slides[this.currentSlideIndex];
         const textureData = await this.loadTexture(currentSlidePath);
         this.currentTexture = textureData.texture;
 
-        // Set original slide dimensions from first loaded image (never changes)
+        // Store original slide dimensions from first loaded image
         if (this.originalSlideWidth === 0 || this.originalSlideHeight === 0) {
             this.originalSlideWidth = textureData.width;
             this.originalSlideHeight = textureData.height;
         }
 
-        // Load next few slides for the stack effect
+        // Preload next slides for stack effect
         this.nextTextures = [];
-        const slidesToPreload = Math.min(5, this.getRemainingSlides());
+        const slidesToPreload = Math.min(CONFIG.SLIDES_TO_PRELOAD, this.getRemainingSlides());
 
         for (let i = 1; i <= slidesToPreload; i++) {
             const idx = this.currentSlideIndex + i;
@@ -266,15 +303,6 @@ class SlidePresentation {
                 this.nextTextures.push(textureData.texture);
             }
         }
-    }
-
-    generateNextSlidePosition() {
-        // Random rotation between -15 and 15 degrees
-        this.nextSlideRotation = (Math.random() - 0.5) * 30;
-        // Random offset X between -0.2 and 0.2
-        this.nextSlideOffsetX = (Math.random() - 0.5) * 0.4;
-        // Random offset Y between -0.2 and 0.2
-        this.nextSlideOffsetY = (Math.random() - 0.5) * 0.4;
     }
 
     async loadTexture(path) {
@@ -308,50 +336,76 @@ class SlidePresentation {
         return textureData;
     }
 
+    generateNextSlidePosition() {
+        // Generate random rotation
+        this.nextSlideRotation = (Math.random() - 0.5) * CONFIG.NEXT_SLIDE_ROTATION_RANGE;
+        // Generate random offsets
+        this.nextSlideOffsetX = (Math.random() - 0.5) * CONFIG.NEXT_SLIDE_OFFSET_RANGE;
+        this.nextSlideOffsetY = (Math.random() - 0.5) * CONFIG.NEXT_SLIDE_OFFSET_RANGE;
+    }
+
     getRemainingSlides() {
         return this.slides.length - this.currentSlideIndex;
     }
 
-    setupEventListeners() {
-        const handleInteraction = (e) => {
-            e.preventDefault();
-            if (!this.isAnimating) {
-                this.throwSlide();
-            }
-        };
+    // ========================================================================
+    // PROGRESS MANAGEMENT
+    // ========================================================================
 
-        this.canvas.addEventListener('click', handleInteraction);
-        this.canvas.addEventListener('touchstart', handleInteraction, { passive: false });
+    loadProgress() {
+        const saved = this.getCookie(CONFIG.PROGRESS_COOKIE_NAME);
+        if (saved) {
+            try {
+                const state = JSON.parse(saved);
+                this.currentSlideIndex = state.current;
+
+                // Validate saved state
+                if (this.currentSlideIndex >= this.slides.length) {
+                    this.currentSlideIndex = 0;
+                }
+            } catch (e) {
+                this.currentSlideIndex = 0;
+            }
+        } else {
+            this.currentSlideIndex = 0;
+        }
     }
+
+    saveProgress() {
+        const state = {
+            current: this.currentSlideIndex
+        };
+        this.setCookie(CONFIG.PROGRESS_COOKIE_NAME, JSON.stringify(state), CONFIG.COOKIE_EXPIRY_DAYS);
+    }
+
+    // ========================================================================
+    // ANIMATION
+    // ========================================================================
 
     throwSlide() {
         this.isAnimating = true;
         this.animationProgress = 0;
 
-        // Random throw direction
+        // Generate random throw direction
         const angle = Math.random() * Math.PI * 2;
-        const distance = 2.5 + Math.random() * 0.5;
+        const distance = CONFIG.THROW_DISTANCE_MIN + Math.random() * CONFIG.THROW_DISTANCE_RANGE;
         this.throwDirection = {
             x: Math.cos(angle) * distance,
             y: Math.sin(angle) * distance
         };
 
-        // Random rotation direction
-        this.throwRotation = (Math.random() - 0.5) * 720; // -360 to 360 degrees
+        // Generate random rotation
+        this.throwRotation = (Math.random() - 0.5) * CONFIG.THROW_ROTATION_RANGE;
 
         this.animateThrow();
     }
 
     animateThrow() {
-        const duration = 500; // ms
         const startTime = performance.now();
 
         const animate = (currentTime) => {
             const elapsed = currentTime - startTime;
-            this.animationProgress = Math.min(elapsed / duration, 1);
-
-            // Ease out cubic
-            const eased = 1 - Math.pow(1 - this.animationProgress, 3);
+            this.animationProgress = Math.min(elapsed / CONFIG.THROW_DURATION, 1);
 
             this.render();
 
@@ -368,51 +422,48 @@ class SlidePresentation {
     async onSlideThrowComplete() {
         this.isAnimating = false;
 
-        // Save the old "next" slide position before loading new slides
+        // Save old next slide position for animation
         const oldNextRotation = this.nextSlideRotation;
         const oldNextOffsetX = this.nextSlideOffsetX;
         const oldNextOffsetY = this.nextSlideOffsetY;
 
+        // Advance to next slide
         this.currentSlideIndex++;
-
         if (this.currentSlideIndex >= this.slides.length) {
-            // Loop back to start
             this.currentSlideIndex = 0;
         }
 
         this.saveProgress();
         await this.loadCurrentSlides();
 
-        // Restore the old values so the animation can use them
-        // (what was "next" is now "current" and should animate from old position)
+        // Restore old values for slide-in animation
         this.nextSlideRotation = oldNextRotation;
         this.nextSlideOffsetX = oldNextOffsetX;
         this.nextSlideOffsetY = oldNextOffsetY;
 
-        // Reset throw direction to signal we're in slide-in mode, not throw mode
+        // Reset throw direction to signal slide-in mode
         this.throwDirection = { x: 0, y: 0 };
         this.throwRotation = 0;
 
-        // Start animation of old "next" slide moving to center
+        // Start slide-in animation
         this.isAnimating = true;
         this.animationProgress = 0;
-        this.animateNextSlideToCenter();
+        this.animateSlideIn();
     }
 
-    animateNextSlideToCenter() {
-        const duration = 500; // ms
+    animateSlideIn() {
         const startTime = performance.now();
 
         const animate = (currentTime) => {
             const elapsed = currentTime - startTime;
-            this.animationProgress = Math.min(elapsed / duration, 1);
+            this.animationProgress = Math.min(elapsed / CONFIG.SLIDE_IN_DURATION, 1);
 
             this.render();
 
             if (this.animationProgress < 1) {
                 requestAnimationFrame(animate);
             } else {
-                // Animation complete, generate new random position for the actual new next slide
+                // Animation complete, generate new position for new next slide
                 this.isAnimating = false;
                 this.generateNextSlidePosition();
                 this.render();
@@ -422,23 +473,9 @@ class SlidePresentation {
         requestAnimationFrame(animate);
     }
 
-    createTransformMatrix(offsetX, offsetY, scale, rotationDeg, depth) {
-        const rad = (rotationDeg * Math.PI) / 180;
-        const cos = Math.cos(rad);
-        const sin = Math.sin(rad);
-
-        // Create transformation matrix
-        // Use display dimensions (in CSS pixels) and convert to normalized device coordinates
-        const scaleX = (this.displayWidth / window.innerWidth) * scale;
-        const scaleY = (this.displayHeight / window.innerHeight) * scale;
-
-        return new Float32Array([
-            cos * scaleX, sin * scaleX, 0, 0,
-            -sin * scaleY, cos * scaleY, 0, 0,
-            0, 0, 1, 0,
-            offsetX, offsetY, depth, 1
-        ]);
-    }
+    // ========================================================================
+    // RENDERING
+    // ========================================================================
 
     render() {
         const commandEncoder = this.device.createCommandEncoder();
@@ -456,20 +493,29 @@ class SlidePresentation {
         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
         passEncoder.setPipeline(this.pipeline);
 
-        // Render stack of next slides (from back to front)
+        // Render stack of next slides (back to front)
+        this.renderStack(passEncoder);
+
+        // Render current slide with animation
+        this.renderCurrentSlide(passEncoder);
+
+        passEncoder.end();
+        this.device.queue.submit([commandEncoder.finish()]);
+    }
+
+    renderStack(passEncoder) {
         const remaining = this.getRemainingSlides();
-        const maxStack = 5;
-        const stackSize = Math.min(maxStack, remaining - 1);
+        const stackSize = Math.min(CONFIG.MAX_STACK_SIZE, remaining - 1);
 
         for (let i = stackSize - 1; i >= 0; i--) {
             if (i < this.nextTextures.length) {
-                const depth = -0.5 - (i * 0.05);
-                const offset = (stackSize - i) * 3;
-                const scale = 0.95 + (i * 0.01);
+                const depth = -0.5 - (i * CONFIG.STACK_DEPTH_OFFSET);
+                const offset = (stackSize - i) * CONFIG.STACK_POSITION_OFFSET;
+                const scale = CONFIG.STACK_BASE_SCALE + (i * CONFIG.STACK_SCALE_INCREMENT);
 
-                // Calculate visibility: fully visible until last few slides
+                // Calculate visibility
                 let opacity = 1.0;
-                if (remaining <= maxStack) {
+                if (remaining <= CONFIG.MAX_STACK_SIZE) {
                     const slidePosition = stackSize - i;
                     if (slidePosition >= remaining - 1) {
                         opacity = 0.0;
@@ -480,25 +526,30 @@ class SlidePresentation {
                 let slideOffsetY = -offset;
                 let slideRotation = 0;
 
-                // First slide in stack (next slide) has special animated positioning
+                // Special positioning for next slide (first in stack)
                 if (i === 0 && this.nextTextures.length > 0) {
-                    const baseBrightness = 0.6; // 40% darkened
-
                     if (this.isAnimating) {
-                        // Animate from random rotated/offset/dark position to neutral
-                        const eased = 1 - Math.pow(1 - this.animationProgress, 3);
-                        slideRotation = this.nextSlideRotation * (1 - eased);
-                        slideOffsetX = this.nextSlideOffsetX * (1 - eased);
-                        slideOffsetY = this.nextSlideOffsetY * (1 - eased);
-                        // Animate brightness from dark to full
-                        const brightness = baseBrightness + (1.0 - baseBrightness) * eased;
-                        opacity *= brightness;
+                        // Animate from random position to neutral (only during slide-in)
+                        if (this.throwDirection.x === 0 && this.throwDirection.y === 0) {
+                            const eased = 1 - Math.pow(1 - this.animationProgress, 3);
+                            slideRotation = this.nextSlideRotation * (1 - eased);
+                            slideOffsetX = this.nextSlideOffsetX * (1 - eased);
+                            slideOffsetY = this.nextSlideOffsetY * (1 - eased);
+                            const brightness = CONFIG.NEXT_SLIDE_BRIGHTNESS + (1.0 - CONFIG.NEXT_SLIDE_BRIGHTNESS) * eased;
+                            opacity *= brightness;
+                        } else {
+                            // During throw, keep next slide at its position
+                            slideRotation = this.nextSlideRotation;
+                            slideOffsetX = this.nextSlideOffsetX;
+                            slideOffsetY = this.nextSlideOffsetY;
+                            opacity *= CONFIG.NEXT_SLIDE_BRIGHTNESS;
+                        }
                     } else {
-                        // Static position: randomly rotated, offset, and darkened
+                        // Static position: rotated, offset, and darkened
                         slideRotation = this.nextSlideRotation;
                         slideOffsetX = this.nextSlideOffsetX;
                         slideOffsetY = this.nextSlideOffsetY;
-                        opacity *= baseBrightness;
+                        opacity *= CONFIG.NEXT_SLIDE_BRIGHTNESS;
                     }
                 }
 
@@ -514,49 +565,45 @@ class SlidePresentation {
                 );
             }
         }
+    }
 
-        // Render current slide (with throw animation or slide-in animation)
-        if (this.currentTexture) {
-            let offsetX = 0;
-            let offsetY = 0;
-            let rotation = 0;
-            let opacity = 1.0;
+    renderCurrentSlide(passEncoder) {
+        if (!this.currentTexture) return;
 
-            if (this.isAnimating) {
-                const eased = 1 - Math.pow(1 - this.animationProgress, 3);
+        let offsetX = 0;
+        let offsetY = 0;
+        let rotation = 0;
+        let opacity = 1.0;
 
-                // Check if we're in throw mode or slide-in mode
-                if (this.throwDirection.x !== 0 || this.throwDirection.y !== 0) {
-                    // Throw animation: current slide flying away
-                    offsetX = this.throwDirection.x * eased;
-                    offsetY = this.throwDirection.y * eased;
-                    rotation = this.throwRotation * eased;
-                    opacity = 1.0 - this.animationProgress;
-                } else {
-                    // Slide-in animation: new current slide (was next) moving to center
-                    const baseBrightness = 0.6; // 40% darkened
-                    offsetX = this.nextSlideOffsetX * (1 - eased);
-                    offsetY = this.nextSlideOffsetY * (1 - eased);
-                    rotation = this.nextSlideRotation * (1 - eased);
-                    const brightness = baseBrightness + (1.0 - baseBrightness) * eased;
-                    opacity = brightness;
-                }
+        if (this.isAnimating) {
+            const eased = 1 - Math.pow(1 - this.animationProgress, 3);
+
+            if (this.throwDirection.x !== 0 || this.throwDirection.y !== 0) {
+                // Throw animation: current slide flying away
+                offsetX = this.throwDirection.x * eased;
+                offsetY = this.throwDirection.y * eased;
+                rotation = this.throwRotation * eased;
+                opacity = 1.0 - this.animationProgress;
+            } else {
+                // Slide-in animation: new current slide moving to center
+                offsetX = this.nextSlideOffsetX * (1 - eased);
+                offsetY = this.nextSlideOffsetY * (1 - eased);
+                rotation = this.nextSlideRotation * (1 - eased);
+                const brightness = CONFIG.NEXT_SLIDE_BRIGHTNESS + (1.0 - CONFIG.NEXT_SLIDE_BRIGHTNESS) * eased;
+                opacity = brightness;
             }
-
-            this.renderSlide(
-                this.currentTexture,
-                offsetX,
-                offsetY,
-                1.0,
-                rotation,
-                0,
-                opacity,
-                passEncoder
-            );
         }
 
-        passEncoder.end();
-        this.device.queue.submit([commandEncoder.finish()]);
+        this.renderSlide(
+            this.currentTexture,
+            offsetX,
+            offsetY,
+            1.0,
+            rotation,
+            0,
+            opacity,
+            passEncoder
+        );
     }
 
     renderSlide(texture, offsetX, offsetY, scale, rotation, depth, opacity, passEncoder) {
@@ -592,7 +639,27 @@ class SlidePresentation {
         passEncoder.draw(6, 1, 0, 0);
     }
 
-    // Cookie utilities
+    createTransformMatrix(offsetX, offsetY, scale, rotationDeg, depth) {
+        const rad = (rotationDeg * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+
+        // Convert to normalized device coordinates
+        const scaleX = (this.displayWidth / window.innerWidth) * scale;
+        const scaleY = (this.displayHeight / window.innerHeight) * scale;
+
+        return new Float32Array([
+            cos * scaleX, sin * scaleX, 0, 0,
+            -sin * scaleY, cos * scaleY, 0, 0,
+            0, 0, 1, 0,
+            offsetX, offsetY, depth, 1
+        ]);
+    }
+
+    // ========================================================================
+    // UTILITY METHODS
+    // ========================================================================
+
     setCookie(name, value, days) {
         const expires = new Date();
         expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000);
@@ -618,7 +685,9 @@ class SlidePresentation {
     }
 }
 
-// Initialize the app when DOM is ready
+// ============================================================================
+// APPLICATION INITIALIZATION
+// ============================================================================
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => new SlidePresentation());
 } else {
