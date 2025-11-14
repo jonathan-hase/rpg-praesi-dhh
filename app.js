@@ -43,6 +43,8 @@ class SlidePresentation {
             this.loadProgress();
             this.setupCanvas();
             await this.loadCurrentSlides();
+            // Generate initial random position for next slide
+            this.generateNextSlidePosition();
             // Update canvas size now that we have slide dimensions
             this.updateCanvasSize();
             this.setupEventListeners();
@@ -264,9 +266,6 @@ class SlidePresentation {
                 this.nextTextures.push(textureData.texture);
             }
         }
-
-        // Generate random position for next slide
-        this.generateNextSlidePosition();
     }
 
     generateNextSlidePosition() {
@@ -368,6 +367,12 @@ class SlidePresentation {
 
     async onSlideThrowComplete() {
         this.isAnimating = false;
+
+        // Save the old "next" slide position before loading new slides
+        const oldNextRotation = this.nextSlideRotation;
+        const oldNextOffsetX = this.nextSlideOffsetX;
+        const oldNextOffsetY = this.nextSlideOffsetY;
+
         this.currentSlideIndex++;
 
         if (this.currentSlideIndex >= this.slides.length) {
@@ -377,9 +382,44 @@ class SlidePresentation {
 
         this.saveProgress();
         await this.loadCurrentSlides();
-        // Generate new random position for the new next slide
-        this.generateNextSlidePosition();
-        this.render();
+
+        // Restore the old values so the animation can use them
+        // (what was "next" is now "current" and should animate from old position)
+        this.nextSlideRotation = oldNextRotation;
+        this.nextSlideOffsetX = oldNextOffsetX;
+        this.nextSlideOffsetY = oldNextOffsetY;
+
+        // Reset throw direction to signal we're in slide-in mode, not throw mode
+        this.throwDirection = { x: 0, y: 0 };
+        this.throwRotation = 0;
+
+        // Start animation of old "next" slide moving to center
+        this.isAnimating = true;
+        this.animationProgress = 0;
+        this.animateNextSlideToCenter();
+    }
+
+    animateNextSlideToCenter() {
+        const duration = 500; // ms
+        const startTime = performance.now();
+
+        const animate = (currentTime) => {
+            const elapsed = currentTime - startTime;
+            this.animationProgress = Math.min(elapsed / duration, 1);
+
+            this.render();
+
+            if (this.animationProgress < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                // Animation complete, generate new random position for the actual new next slide
+                this.isAnimating = false;
+                this.generateNextSlidePosition();
+                this.render();
+            }
+        };
+
+        requestAnimationFrame(animate);
     }
 
     createTransformMatrix(offsetX, offsetY, scale, rotationDeg, depth) {
@@ -475,7 +515,7 @@ class SlidePresentation {
             }
         }
 
-        // Render current slide (with throw animation if active)
+        // Render current slide (with throw animation or slide-in animation)
         if (this.currentTexture) {
             let offsetX = 0;
             let offsetY = 0;
@@ -484,10 +524,23 @@ class SlidePresentation {
 
             if (this.isAnimating) {
                 const eased = 1 - Math.pow(1 - this.animationProgress, 3);
-                offsetX = this.throwDirection.x * eased;
-                offsetY = this.throwDirection.y * eased;
-                rotation = this.throwRotation * eased;
-                opacity = 1.0 - this.animationProgress;
+
+                // Check if we're in throw mode or slide-in mode
+                if (this.throwDirection.x !== 0 || this.throwDirection.y !== 0) {
+                    // Throw animation: current slide flying away
+                    offsetX = this.throwDirection.x * eased;
+                    offsetY = this.throwDirection.y * eased;
+                    rotation = this.throwRotation * eased;
+                    opacity = 1.0 - this.animationProgress;
+                } else {
+                    // Slide-in animation: new current slide (was next) moving to center
+                    const baseBrightness = 0.6; // 40% darkened
+                    offsetX = this.nextSlideOffsetX * (1 - eased);
+                    offsetY = this.nextSlideOffsetY * (1 - eased);
+                    rotation = this.nextSlideRotation * (1 - eased);
+                    const brightness = baseBrightness + (1.0 - baseBrightness) * eased;
+                    opacity = brightness;
+                }
             }
 
             this.renderSlide(
