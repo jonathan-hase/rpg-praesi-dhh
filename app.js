@@ -33,6 +33,12 @@ const CONFIG = {
     // Performance
     SLIDES_TO_PRELOAD: 5, // Number of slides to preload ahead
 
+    // Grid Layout
+    GRID_GAP: 20, // Gap between grid images in pixels
+    GRID_ANIMATION_DURATION: 800, // Duration for grid image animations in ms
+    GRID_STAGGER_DELAY: 50, // Delay between each image animation in ms
+    GRID_ANIMATION_TYPE: 'stagger', // Animation type: 'stagger', 'wave', 'random'
+
     // Storage
     COOKIE_EXPIRY_DAYS: 365, // Days until progress cookie expires
     PROGRESS_COOKIE_NAME: 'slideProgress',
@@ -54,12 +60,15 @@ class SlidePresentation {
         // Slide Data
         this.slides = [];
         this.currentSlideIndex = 0;
+        this.currentSlideType = 'single'; // 'single' or 'grid'
+        this.currentGridConfig = null; // { images, columns, rows }
 
         // Animation State
         this.isAnimating = false;
         this.animationProgress = 0;
         this.throwDirection = { x: 0, y: 0 };
         this.throwRotation = 0;
+        this.gridAnimationStartTime = 0;
 
         // Slide Dimensions
         this.originalSlideWidth = 0;  // Original image dimensions (never changes)
@@ -77,7 +86,8 @@ class SlidePresentation {
         this.context = null;
         this.pipeline = null;
         this.textureCache = new Map();
-        this.currentTexture = null;
+        this.currentTexture = null;       // For single slides
+        this.currentGridTextures = [];    // For grid slides
         this.nextTextures = [];
 
         this.init();
@@ -279,27 +289,62 @@ class SlidePresentation {
     // ========================================================================
 
     async loadCurrentSlides() {
-        // Load current slide texture
-        const currentSlidePath = this.slides[this.currentSlideIndex];
-        const textureData = await this.loadTexture(currentSlidePath);
-        this.currentTexture = textureData.texture;
+        const currentSlide = this.slides[this.currentSlideIndex];
 
-        // Store original slide dimensions from first loaded image
-        if (this.originalSlideWidth === 0 || this.originalSlideHeight === 0) {
-            this.originalSlideWidth = textureData.width;
-            this.originalSlideHeight = textureData.height;
+        // Check if it's a grid slide or single slide
+        if (typeof currentSlide === 'object' && currentSlide.type === 'grid') {
+            // Load grid slide
+            this.currentSlideType = 'grid';
+            this.currentGridConfig = {
+                images: currentSlide.images,
+                columns: currentSlide.columns,
+                rows: currentSlide.rows
+            };
+
+            // Load all grid textures
+            this.currentGridTextures = [];
+            for (const imagePath of currentSlide.images) {
+                const textureData = await this.loadTexture(imagePath);
+                this.currentGridTextures.push(textureData.texture);
+
+                // Store original dimensions from first image if not set
+                if (this.originalSlideWidth === 0 || this.originalSlideHeight === 0) {
+                    // For grid, use full viewport dimensions
+                    this.originalSlideWidth = window.innerWidth - (CONFIG.WINDOW_GAP * 2);
+                    this.originalSlideHeight = window.innerHeight - (CONFIG.WINDOW_GAP * 2);
+                }
+            }
+
+            this.currentTexture = null; // Grid doesn't use single texture
+        } else {
+            // Load single slide
+            this.currentSlideType = 'single';
+            this.currentGridConfig = null;
+            this.currentGridTextures = [];
+
+            const textureData = await this.loadTexture(currentSlide);
+            this.currentTexture = textureData.texture;
+
+            // Store original slide dimensions from first loaded image
+            if (this.originalSlideWidth === 0 || this.originalSlideHeight === 0) {
+                this.originalSlideWidth = textureData.width;
+                this.originalSlideHeight = textureData.height;
+            }
         }
 
-        // Preload next slides for stack effect
+        // Preload next slides for stack effect (only for single slides)
         this.nextTextures = [];
         const slidesToPreload = Math.min(CONFIG.SLIDES_TO_PRELOAD, this.getRemainingSlides());
 
         for (let i = 1; i <= slidesToPreload; i++) {
             const idx = this.currentSlideIndex + i;
             if (idx < this.slides.length) {
-                const slidePath = this.slides[idx];
-                const textureData = await this.loadTexture(slidePath);
-                this.nextTextures.push(textureData.texture);
+                const nextSlide = this.slides[idx];
+                // Only preload single slides for stack
+                if (typeof nextSlide === 'string') {
+                    const textureData = await this.loadTexture(nextSlide);
+                    this.nextTextures.push(textureData.texture);
+                }
             }
         }
     }
@@ -567,6 +612,12 @@ class SlidePresentation {
     }
 
     renderCurrentSlide(passEncoder) {
+        // Handle grid slides differently
+        if (this.currentSlideType === 'grid') {
+            this.renderGridSlide(passEncoder);
+            return;
+        }
+
         if (!this.currentTexture) return;
 
         let offsetX = 0;
@@ -603,6 +654,142 @@ class SlidePresentation {
             opacity,
             passEncoder
         );
+    }
+
+    renderGridSlide(passEncoder) {
+        if (!this.currentGridConfig || this.currentGridTextures.length === 0) return;
+
+        const { columns, rows } = this.currentGridConfig;
+        const totalImages = this.currentGridTextures.length;
+
+        // Calculate available space (full screen minus window gap)
+        const availableWidth = window.innerWidth - (CONFIG.WINDOW_GAP * 2);
+        const availableHeight = window.innerHeight - (CONFIG.WINDOW_GAP * 2);
+
+        // Calculate grid cell dimensions
+        const cellWidth = (availableWidth - (CONFIG.GRID_GAP * (columns - 1))) / columns;
+        const cellHeight = (availableHeight - (CONFIG.GRID_GAP * (rows - 1))) / rows;
+
+        // Calculate starting position (centered)
+        const gridWidth = (cellWidth * columns) + (CONFIG.GRID_GAP * (columns - 1));
+        const gridHeight = (cellHeight * rows) + (CONFIG.GRID_GAP * (rows - 1));
+        const startX = -gridWidth / 2;
+        const startY = -gridHeight / 2;
+
+        // Render each image in the grid
+        for (let i = 0; i < totalImages; i++) {
+            const col = i % columns;
+            const row = Math.floor(i / columns);
+
+            const x = startX + (col * (cellWidth + CONFIG.GRID_GAP)) + (cellWidth / 2);
+            const y = startY + (row * (cellHeight + CONFIG.GRID_GAP)) + (cellHeight / 2);
+
+            // Calculate opacity based on animation
+            let opacity = 1.0;
+            if (this.isAnimating && this.throwDirection.x === 0 && this.throwDirection.y === 0) {
+                // Grid fade-in animation
+                const delay = this.calculateGridAnimationDelay(i, totalImages, col, row);
+                const progress = Math.max(0, Math.min(1, (this.animationProgress * CONFIG.GRID_ANIMATION_DURATION - delay) / CONFIG.GRID_ANIMATION_DURATION));
+                const eased = 1 - Math.pow(1 - progress, 3);
+                opacity = eased;
+            } else if (this.isAnimating) {
+                // Throw animation - fade out
+                opacity = 1.0 - this.animationProgress;
+            }
+
+            // Calculate scale to fit cell while maintaining aspect ratio
+            const texture = this.currentGridTextures[i];
+            const textureAspect = texture.width / texture.height;
+            const cellAspect = cellWidth / cellHeight;
+
+            let renderWidth, renderHeight;
+            if (textureAspect > cellAspect) {
+                // Width-constrained
+                renderWidth = cellWidth;
+                renderHeight = cellWidth / textureAspect;
+            } else {
+                // Height-constrained
+                renderHeight = cellHeight;
+                renderWidth = cellHeight * textureAspect;
+            }
+
+            // Convert pixel dimensions to normalized coordinates
+            const scaleX = renderWidth / this.displayWidth;
+            const scaleY = renderHeight / this.displayHeight;
+            const offsetX = x / this.displayWidth;
+            const offsetY = y / this.displayHeight;
+
+            this.renderGridCell(
+                texture,
+                offsetX,
+                offsetY,
+                scaleX,
+                scaleY,
+                0,
+                opacity,
+                passEncoder
+            );
+        }
+    }
+
+    calculateGridAnimationDelay(index, _total, col, row) {
+        switch (CONFIG.GRID_ANIMATION_TYPE) {
+            case 'stagger':
+                return index * CONFIG.GRID_STAGGER_DELAY;
+            case 'wave':
+                return (col + row) * CONFIG.GRID_STAGGER_DELAY;
+            case 'random':
+                return Math.random() * CONFIG.GRID_ANIMATION_DURATION * 0.5;
+            default:
+                return 0;
+        }
+    }
+
+    renderGridCell(texture, offsetX, offsetY, scaleX, scaleY, depth, opacity, passEncoder) {
+        const sampler = this.device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+        });
+
+        const transformMatrix = this.createGridCellTransform(offsetX, offsetY, scaleX, scaleY, depth);
+
+        const uniformBuffer = this.device.createBuffer({
+            size: 80,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        const uniformData = new Float32Array(20);
+        uniformData.set(transformMatrix, 0);
+        uniformData[16] = opacity;
+        uniformData[17] = depth;
+
+        this.device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+        const bindGroup = this.device.createBindGroup({
+            layout: this.pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: sampler },
+                { binding: 2, resource: texture.createView() },
+            ],
+        });
+
+        passEncoder.setBindGroup(0, bindGroup);
+        passEncoder.draw(6, 1, 0, 0);
+    }
+
+    createGridCellTransform(offsetX, offsetY, scaleX, scaleY, depth) {
+        const matrix = new Float32Array(16);
+        matrix[0] = scaleX * 2;
+        matrix[5] = scaleY * 2;
+        matrix[10] = 1;
+        matrix[15] = 1;
+
+        matrix[12] = offsetX * 2;
+        matrix[13] = offsetY * 2;
+        matrix[14] = depth;
+
+        return matrix;
     }
 
     renderSlide(texture, offsetX, offsetY, scale, rotation, depth, opacity, passEncoder) {
