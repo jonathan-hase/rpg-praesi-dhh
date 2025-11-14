@@ -12,9 +12,12 @@ class SlidePresentation {
         this.throwDirection = { x: 0, y: 0 };
         this.throwRotation = 0;
 
-        // Slide dimensions will be determined from loaded images
-        this.slideWidth = 0;
-        this.slideHeight = 0;
+        // Original slide dimensions from loaded images (never changes)
+        this.originalSlideWidth = 0;
+        this.originalSlideHeight = 0;
+        // Display dimensions (recalculated on resize)
+        this.displayWidth = 0;
+        this.displayHeight = 0;
 
         // WebGPU resources
         this.device = null;
@@ -33,8 +36,10 @@ class SlidePresentation {
             await this.loadSlideList();
             await this.initWebGPU();
             this.loadProgress();
+            this.setupCanvas();
             await this.loadCurrentSlides();
-            await this.setupCanvas();
+            // Update canvas size now that we have slide dimensions
+            this.updateCanvasSize();
             this.setupEventListeners();
             this.loadingEl.style.display = 'none';
             this.render();
@@ -166,32 +171,27 @@ class SlidePresentation {
     }
 
     setupCanvas() {
-        const updateSize = () => {
+        this.updateCanvasSize = () => {
             const dpi = window.devicePixelRatio || 1;
 
-            // Use the aspect ratio from the loaded slide
-            // If slideWidth/slideHeight are not set yet, they will be set after loading first slide
-            if (this.slideWidth > 0 && this.slideHeight > 0) {
-                const slideAspect = this.slideWidth / this.slideHeight;
+            // Use the aspect ratio from the original loaded slide
+            if (this.originalSlideWidth > 0 && this.originalSlideHeight > 0) {
+                const slideAspect = this.originalSlideWidth / this.originalSlideHeight;
 
                 // 10px gap on all sides
                 const gap = 10;
                 const maxWidth = window.innerWidth - (gap * 2);
                 const maxHeight = window.innerHeight - (gap * 2);
 
-                let displayWidth, displayHeight;
                 if (maxWidth / maxHeight > slideAspect) {
                     // Height-constrained
-                    displayHeight = maxHeight;
-                    displayWidth = displayHeight * slideAspect;
+                    this.displayHeight = maxHeight;
+                    this.displayWidth = this.displayHeight * slideAspect;
                 } else {
                     // Width-constrained
-                    displayWidth = maxWidth;
-                    displayHeight = displayWidth / slideAspect;
+                    this.displayWidth = maxWidth;
+                    this.displayHeight = this.displayWidth / slideAspect;
                 }
-
-                this.slideWidth = displayWidth;
-                this.slideHeight = displayHeight;
             }
 
             this.canvas.width = window.innerWidth * dpi;
@@ -200,8 +200,13 @@ class SlidePresentation {
             this.canvas.style.height = `${window.innerHeight}px`;
         };
 
-        updateSize();
-        window.addEventListener('resize', updateSize);
+        this.updateCanvasSize();
+        window.addEventListener('resize', () => {
+            this.updateCanvasSize();
+            if (this.currentTexture) {
+                this.render();
+            }
+        });
     }
 
     loadProgress() {
@@ -236,10 +241,10 @@ class SlidePresentation {
         const textureData = await this.loadTexture(currentSlidePath);
         this.currentTexture = textureData.texture;
 
-        // Set slide dimensions from first loaded image
-        if (this.slideWidth === 0 || this.slideHeight === 0) {
-            this.slideWidth = textureData.width;
-            this.slideHeight = textureData.height;
+        // Set original slide dimensions from first loaded image (never changes)
+        if (this.originalSlideWidth === 0 || this.originalSlideHeight === 0) {
+            this.originalSlideWidth = textureData.width;
+            this.originalSlideHeight = textureData.height;
         }
 
         // Load next few slides for the stack effect
@@ -364,11 +369,9 @@ class SlidePresentation {
         const sin = Math.sin(rad);
 
         // Create transformation matrix
-        const aspectRatio = this.canvas.width / this.canvas.height;
-        const slideAspect = this.slideWidth / this.slideHeight;
-
-        const scaleX = (this.slideWidth / this.canvas.width) * 2 * scale;
-        const scaleY = (this.slideHeight / this.canvas.height) * 2 * scale;
+        // Use display dimensions (in CSS pixels) and convert to normalized device coordinates
+        const scaleX = (this.displayWidth / window.innerWidth) * scale;
+        const scaleY = (this.displayHeight / window.innerHeight) * scale;
 
         return new Float32Array([
             cos * scaleX, sin * scaleX, 0, 0,
