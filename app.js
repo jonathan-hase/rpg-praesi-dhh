@@ -174,9 +174,10 @@ class SlidePresentation {
             if (this.slideWidth > 0 && this.slideHeight > 0) {
                 const slideAspect = this.slideWidth / this.slideHeight;
 
-                // Ensure the slide fits on screen with some margin
-                const maxWidth = window.innerWidth * 0.9;
-                const maxHeight = window.innerHeight * 0.9;
+                // 10px gap on all sides
+                const gap = 10;
+                const maxWidth = window.innerWidth - (gap * 2);
+                const maxHeight = window.innerHeight - (gap * 2);
 
                 let displayWidth, displayHeight;
                 if (maxWidth / maxHeight > slideAspect) {
