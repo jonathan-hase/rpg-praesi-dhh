@@ -19,6 +19,11 @@ class SlidePresentation {
         this.displayWidth = 0;
         this.displayHeight = 0;
 
+        // Next slide random positioning
+        this.nextSlideRotation = 0;
+        this.nextSlideOffsetX = 0;
+        this.nextSlideOffsetY = 0;
+
         // WebGPU resources
         this.device = null;
         this.context = null;
@@ -259,6 +264,18 @@ class SlidePresentation {
                 this.nextTextures.push(textureData.texture);
             }
         }
+
+        // Generate random position for next slide
+        this.generateNextSlidePosition();
+    }
+
+    generateNextSlidePosition() {
+        // Random rotation between -15 and 15 degrees
+        this.nextSlideRotation = (Math.random() - 0.5) * 30;
+        // Random offset X between -0.2 and 0.2
+        this.nextSlideOffsetX = (Math.random() - 0.5) * 0.4;
+        // Random offset Y between -0.2 and 0.2
+        this.nextSlideOffsetY = (Math.random() - 0.5) * 0.4;
     }
 
     async loadTexture(path) {
@@ -360,6 +377,8 @@ class SlidePresentation {
 
         this.saveProgress();
         await this.loadCurrentSlides();
+        // Generate new random position for the new next slide
+        this.generateNextSlidePosition();
         this.render();
     }
 
@@ -417,12 +436,38 @@ class SlidePresentation {
                     }
                 }
 
+                let slideOffsetX = offset;
+                let slideOffsetY = -offset;
+                let slideRotation = 0;
+
+                // First slide in stack (next slide) has special animated positioning
+                if (i === 0 && this.nextTextures.length > 0) {
+                    const baseBrightness = 0.6; // 40% darkened
+
+                    if (this.isAnimating) {
+                        // Animate from random rotated/offset/dark position to neutral
+                        const eased = 1 - Math.pow(1 - this.animationProgress, 3);
+                        slideRotation = this.nextSlideRotation * (1 - eased);
+                        slideOffsetX = this.nextSlideOffsetX * (1 - eased);
+                        slideOffsetY = this.nextSlideOffsetY * (1 - eased);
+                        // Animate brightness from dark to full
+                        const brightness = baseBrightness + (1.0 - baseBrightness) * eased;
+                        opacity *= brightness;
+                    } else {
+                        // Static position: randomly rotated, offset, and darkened
+                        slideRotation = this.nextSlideRotation;
+                        slideOffsetX = this.nextSlideOffsetX;
+                        slideOffsetY = this.nextSlideOffsetY;
+                        opacity *= baseBrightness;
+                    }
+                }
+
                 this.renderSlide(
                     this.nextTextures[i],
-                    offset,
-                    -offset,
+                    slideOffsetX,
+                    slideOffsetY,
                     scale,
-                    0,
+                    slideRotation,
                     depth,
                     opacity,
                     passEncoder
